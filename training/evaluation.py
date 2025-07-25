@@ -28,6 +28,8 @@ def evaluate_agent(agent, episodes=5):
         positions = []
         velocities = []
         actions_taken = []
+        angular_velocities = []
+        quaternions = []
         
         for step in range(max_episode_length):
             action = agent.select_action(obs, deterministic=True)
@@ -38,6 +40,8 @@ def evaluate_agent(agent, episodes=5):
             
             positions.append(obs[0:3].copy())
             velocities.append(obs[7:10].copy())
+            angular_velocities.append(obs[10:13].copy())
+            quaternions.append(obs[3:7].copy())
             episode_length += 1
             
             if check_done(obs):
@@ -46,6 +50,8 @@ def evaluate_agent(agent, episodes=5):
         # Calculate comprehensive metrics
         positions = np.array(positions)
         velocities = np.array(velocities)
+        angular_velocities = np.array(angular_velocities)
+        quaternions = np.array(quaternions)
         actions_taken = np.array(actions_taken)
         target_pos = np.array([0.0, 0.0, 1.0])
         
@@ -56,14 +62,37 @@ def evaluate_agent(agent, episodes=5):
         precision_5cm = np.mean(distances < 0.05) * 100
         precision_2cm = np.mean(distances < 0.02) * 100
         
-        # Physics score (smooth motion quality)
+        # Stricter physics score (smooth motion quality)
         vel_magnitudes = np.linalg.norm(velocities, axis=1)
-        physics_score = np.mean(vel_magnitudes < 0.4) * 100
+        angular_vel_magnitudes = np.linalg.norm(angular_velocities, axis=1)
         
-        # Safety score (no constraint violations)
-        altitude_safe = np.all((positions[:, 2] > 0.3) & (positions[:, 2] < 1.7))
-        position_safe = np.all((np.abs(positions[:, 0]) < 1.2) & (np.abs(positions[:, 1]) < 1.2))
-        safety_score = 100.0 if altitude_safe and position_safe else 0.0
+        # Penalize high velocities and angular velocities more strictly
+        smooth_velocity = np.mean(vel_magnitudes < 0.3)  # Stricter threshold
+        smooth_angular = np.mean(angular_vel_magnitudes < 0.4)  # Stricter threshold
+        
+        # Check for jerky motion (high acceleration)
+        if len(velocities) > 1:
+            accelerations = np.diff(velocities, axis=0)
+            acc_magnitudes = np.linalg.norm(accelerations, axis=1)
+            smooth_acceleration = np.mean(acc_magnitudes < 0.1)  # New metric
+        else:
+            smooth_acceleration = 1.0
+            
+        physics_score = (smooth_velocity * 0.4 + smooth_angular * 0.4 + smooth_acceleration * 0.2) * 100
+        
+        # Natural safety score (no artificial cap)
+        altitude_violations = np.sum((positions[:, 2] <= 0.35) | (positions[:, 2] >= 1.65))
+        position_violations = np.sum((np.abs(positions[:, 0]) >= 1.15) | (np.abs(positions[:, 1]) >= 1.15))
+        
+        # Check for excessive tilt
+        qw_values = quaternions[:, 0]
+        tilt_violations = np.sum(np.abs(qw_values) < 0.85)  # Stricter tilt check
+        
+        total_violations = altitude_violations + position_violations + tilt_violations
+        violation_rate = total_violations / len(positions)
+        
+        # Natural safety score calculation
+        safety_score = max(0.0, 100.0 * (1 - violation_rate * 2))  # No cap!
         
         results['precisions_10cm'].append(precision_10cm)
         results['precisions_5cm'].append(precision_5cm)

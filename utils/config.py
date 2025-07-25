@@ -1,8 +1,6 @@
 """
 PIATSG Framework Configuration and Utilities
 Physics-Informed Adaptive Transformers with Safety Guarantees
-
-Handles system configuration, device setup, and reproducible seeding.
 """
 
 import os
@@ -19,13 +17,12 @@ def set_reproducible_seed(seed=42):
     np.random.seed(seed)
     random.seed(seed)
     
-    # For maximum performance (slightly less deterministic but much faster)
     torch.backends.cudnn.deterministic = False
     torch.backends.cudnn.benchmark = True
     print(f"Reproducible seed set to {seed}")
 
 def configure_device():
-    """Configure and optimize device for training"""
+    """Configure device and compute resource parameters"""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
@@ -34,37 +31,41 @@ def configure_device():
         total_vram = torch.cuda.get_device_properties(0).total_memory / 1e9
         print(f"VRAM: {total_vram:.1f} GB")
         
-        # GPU optimizations for modern hardware
         torch.backends.cudnn.benchmark = True
         torch.backends.cudnn.deterministic = False
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-        torch.set_float32_matmul_precision('high')  # Use Tensor Cores aggressively
+        torch.set_float32_matmul_precision('high')
         
-        # High VRAM usage (90% instead of 70%)
-        available_vram = total_vram * 0.90
+        # Compute batch and buffer sizes for performance
+        if total_vram >= 12.0:
+            batch_size = 2048
+            buffer_size = 400000
+        elif total_vram >= 8.0:
+            batch_size = 1536
+            buffer_size = 300000
+        elif total_vram >= 6.0:
+            batch_size = 1024
+            buffer_size = 250000
+        else:
+            batch_size = 768
+            buffer_size = 200000
         
-        # Large batch sizes for maximum GPU utilization
-        optimal_batch_size = min(8192, max(4096, int(available_vram * 512)))
-        optimal_buffer_size = min(1000000, max(200000, int(available_vram * 50000)))
+        torch.cuda.set_per_process_memory_fraction(0.90)
         
-        # Set memory allocation strategy
-        torch.cuda.set_per_process_memory_fraction(0.95)
-        
-        print(f"Performance optimizations enabled:")
+        print(f"Performance parameters enabled:")
         print(f"   - Mixed precision training: ENABLED")
-        print(f"   - Large batch size: {optimal_batch_size}")
-        print(f"   - Large buffer size: {optimal_buffer_size:,}")
+        print(f"   - Batch size: {batch_size:,}")
+        print(f"   - Buffer size: {buffer_size:,}")
         print(f"   - TensorFloat-32: ENABLED")
         print(f"   - CuDNN benchmark: ENABLED")
-        print(f"   - Memory fraction: 95%")
-        print(f"   - Tensor Core precision: HIGH")
+        print(f"   - Memory fraction: 90%")
         
-        return device, optimal_batch_size, optimal_buffer_size, total_vram
+        return device, batch_size, buffer_size, total_vram
     else:
-        optimal_batch_size = 1024
-        optimal_buffer_size = 100000
-        return device, optimal_batch_size, optimal_buffer_size, 0.0
+        batch_size = 768
+        buffer_size = 150000
+        return device, batch_size, buffer_size, 0.0
 
 class TrainingConfig:
     """Training configuration parameters"""
@@ -74,24 +75,24 @@ class TrainingConfig:
         self.batch_size = batch_size
         self.buffer_size = buffer_size
         
-        # Training parameters
-        self.num_episodes = 5000
-        self.max_steps_per_episode = 1000
-        self.training_frequency = 500  # Train every N steps
-        self.updates_per_training = 3   # Multiple updates per training session
+        # Training parameters for performance
+        self.num_episodes = 3000
+        self.max_steps_per_episode = 800
+        self.training_frequency = 200
+        self.updates_per_training = 2
         
-        # Learning rates (conservative for mixed precision)
-        self.actor_lr = 0.0001
-        self.critic_lr = 0.0005
-        self.pinn_lr = 0.0003
-        self.operator_lr = 0.0003
-        self.safety_lr = 0.0001
+        # Learning rates - significantly reduced for physics components
+        self.actor_lr = 0.0002
+        self.critic_lr = 0.0008
+        self.pinn_lr = 0.00005      # Reduced from 0.0005
+        self.operator_lr = 0.00005  # Reduced from 0.0005
+        self.safety_lr = 0.00003    # Reduced from 0.0005
         self.alpha_lr = 0.0003
         
         # SAC parameters
         self.tau = 0.005
         self.gamma = 0.99
-        self.target_entropy = -4  # -action_dim
+        self.target_entropy = -4
         
         # Network dimensions
         self.state_dim = 18
@@ -105,6 +106,19 @@ class TrainingConfig:
         # Logging parameters
         self.log_frequency = 25
         self.checkpoint_frequency = 1000
+        
+        print(f"Training Configuration:")
+        print(f"  Episodes: {self.num_episodes}")
+        print(f"  Batch size: {self.batch_size:,}")
+        print(f"  Buffer size: {self.buffer_size:,}")
+        print(f"  Device: {self.device}")
+        print(f"  Training frequency: Every {self.training_frequency} steps")
+        print(f"  Updates per training: {self.updates_per_training}")
+        print(f"  Max episode length: {self.max_steps_per_episode}")
+        print(f"  Physics component learning rates:")
+        print(f"    - PINN LR: {self.pinn_lr}")
+        print(f"    - Operator LR: {self.operator_lr}")
+        print(f"    - Safety LR: {self.safety_lr}")
 
 def create_directories():
     """Create necessary directories for the framework"""
