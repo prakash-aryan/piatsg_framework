@@ -1,0 +1,72 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Log files
+logs/
+*.log
+events.out.tfevents.*
+
+# Model checkpoints
+models/*.pth
+
+# Training artifacts
+runs/
+
+# Environment files
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+__pycache__/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Coverage reports
+.coverage
+htmlcov/
+
+# PyTest artifacts
+.pytest_cache/
+
+# MyPy cache
+.mypy_cache/
+
+# Virtual environment (pipenv)
+Pipfile.lock
+
+# Unit test reports
+test-reports/
+core/__pycache__/__init__.cpython-310.pyc
+core/__pycache__/agent.cpython-310.pyc
+core/__pycache__/components.cpython-310.pyc
+models/best_physics.pth
+models/best_precision_2cm.pth
+models/best_safety.pth
+models/best_precision_10cm.pth
+simulation/__pycache__/environment.cpython-310.pyc
+models/best_precision_5cm.pth
+training/__pycache__/evaluation.cpython-310.pyc
+training/__pycache__/trainer.cpython-310.pyc
+utils/__pycache__/config.cpython-310.pyc
