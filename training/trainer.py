@@ -246,21 +246,24 @@ class PIATSGTrainer:
         recent_rewards = list(self.reward_history)[-10:] if len(self.reward_history) >= 10 else list(self.reward_history)
         recent_avg = np.mean(recent_rewards) if recent_rewards else avg_reward
         
-        # Physics component status with corrected update ratio calculation
+        # Physics component status with adaptive parameters
         physics_status = "Inactive"
         safety_status = "Inactive"
+        current_physics_weight = getattr(self.agent, 'physics_loss_weight', 0)
+        current_safety_weight = getattr(self.agent, 'safety_loss_weight', 0)
+        current_frequency = getattr(self.agent, 'current_physics_update_frequency', 0)
         
         if len(self.physics_loss_history) > 5:
             recent_physics_loss = np.mean(list(self.physics_loss_history)[-5:])
-            physics_status = f"Learning (Loss: {recent_physics_loss:.4f})"
+            physics_status = f"Learning (Loss: {recent_physics_loss:.4f}, Weight: {current_physics_weight:.4f})"
         elif buffer_size > self.agent.min_buffer_for_physics:
-            physics_status = "Starting..."
+            physics_status = f"Starting... (Weight: {current_physics_weight:.4f})"
         
         if len(self.safety_loss_history) > 5:
             recent_safety_loss = np.mean(list(self.safety_loss_history)[-5:])
-            safety_status = f"Learning (Loss: {recent_safety_loss:.4f})"
+            safety_status = f"Learning (Loss: {recent_safety_loss:.4f}, Weight: {current_safety_weight:.4f})"
         elif buffer_size > self.agent.min_buffer_for_physics:
-            safety_status = "Starting..."
+            safety_status = f"Starting... (Weight: {current_safety_weight:.4f})"
         
         # Time tracking indicators
         speed_ratio = eps_per_sec / target_eps_per_sec if target_eps_per_sec > 0 else 0
@@ -289,7 +292,7 @@ class PIATSGTrainer:
             physics_ratio = (physics_updates / total_cycles * 100) if total_cycles > 0 else 0
             
             print(f"  Physics Components - PINN: {physics_status}, CBF: {safety_status}")
-            print(f"  Physics Update Ratio: {physics_updates}/{total_cycles} cycles ({physics_ratio:.1f}%)")
+            print(f"  Physics Update: {physics_updates}/{total_cycles} cycles ({physics_ratio:.1f}%), Freq: every {current_frequency} cycles")
 
     def _log_final_physics_metrics(self):
         """Log final physics-informed training metrics"""

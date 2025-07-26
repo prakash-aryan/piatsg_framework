@@ -183,6 +183,9 @@ class AdaptivePINN(nn.Module):
         self.register_buffer('loss_scale_quat', torch.tensor(0.5))
         self.register_buffer('loss_scale_omega', torch.tensor(0.5))
         
+        # Track physics learning progress for long training
+        self.physics_loss_history = []
+        
     def forward(self, state):
         return self.physics_net(state)
     
@@ -343,11 +346,19 @@ class AdaptivePINN(nn.Module):
             pde_loss = (pde_loss_pos + pde_loss_vel + pde_loss_omega + 
                        pde_loss_quat + 0.1 * pde_loss_controls + 0.1 * pde_loss_target)
             
-            # Balance data and physics losses with extremely conservative physics weight
-            total_loss = data_loss + 0.001 * pde_loss  # Extremely reduced from 0.01 to 0.001
+            # Adaptive physics loss weight based on training progress
+            physics_weight = max(0.005, min(0.02, 0.005 * (1 + len(self.physics_loss_history) / 1000)))
             
-            # Clamp total loss to prevent explosion
-            total_loss = torch.clamp(total_loss, 0, 5)  # Further reduced max from 10 to 5
+            # Balance data and physics losses with adaptive weighting
+            total_loss = data_loss + physics_weight * pde_loss
+            
+            # Track physics loss for adaptive weighting
+            if len(self.physics_loss_history) >= 1000:
+                self.physics_loss_history.pop(0)  # Keep only recent history
+            self.physics_loss_history.append(pde_loss.item() if torch.isfinite(pde_loss) else 0.0)
+            
+            # Clamp total loss to prevent explosion  
+            total_loss = torch.clamp(total_loss, 0, 20)
             
             # Check for NaN or infinity
             if torch.isnan(total_loss) or torch.isinf(total_loss):

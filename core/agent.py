@@ -86,11 +86,13 @@ class PIATSGAgent:
         self.tau = config.tau
         self.gamma = config.gamma
         
-        # Adaptive physics loss weights with very conservative curriculum learning
-        self.initial_physics_weight = 0.01   # Much more conservative
-        self.initial_safety_weight = 0.005   # Much more conservative  
-        self.min_physics_weight = 0.001      # Lower minimum
-        self.min_safety_weight = 0.0005      # Lower minimum
+        # Adaptive physics loss weights with progressive curriculum learning for long training
+        self.initial_physics_weight = 0.01   
+        self.initial_safety_weight = 0.005   
+        self.min_physics_weight = 0.001      
+        self.min_safety_weight = 0.0005      
+        self.max_physics_weight = 0.05       # New: allow weights to increase for long training
+        self.max_safety_weight = 0.02        # New: allow weights to increase for long training
         self.physics_loss_weight = self.initial_physics_weight
         self.safety_loss_weight = self.initial_safety_weight
         
@@ -101,14 +103,15 @@ class PIATSGAgent:
         self.safety_loss_ema = None
         self.ema_alpha = 0.95
         
-        # Component activation thresholds with much more delayed activation
-        self.min_buffer_for_physics = 50000  # Much later activation - when buffer is >10% full
+        # Component activation thresholds optimized for long training
+        self.min_buffer_for_physics = 10000  # Earlier activation for long training
         self.max_grad_norm = 1.0
-        self.physics_grad_norm = 0.05         # Very conservative gradient clipping
+        self.physics_grad_norm = 0.1          # Increased from 0.05 for better learning
         
-        # Physics update frequency control - much more restrictive
-        self.physics_update_frequency = 10    # Update every 10th cycle 
-        self.physics_stable_threshold = 50000 # Never reached (buffer is 400k, but this is not used)
+        # Adaptive physics update frequency based on training progress
+        self.initial_physics_update_frequency = 20  # Start very conservative  
+        self.min_physics_update_frequency = 3       # End more frequent
+        self.current_physics_update_frequency = self.initial_physics_update_frequency
         
         # Performance tracking
         self.update_count = 0
@@ -126,14 +129,15 @@ class PIATSGAgent:
         
         # Print initialization info
         total_params = sum(p.numel() for p in self.parameters())
-        print(f"PIATSG Agent initialized:")
+        print(f"PIATSG Agent initialized for LONG TRAINING:")
         print(f"  Total parameters: {total_params:,}")
-        print(f"  Initial physics loss weight: {self.physics_loss_weight:.6f}")
-        print(f"  Initial safety loss weight: {self.safety_loss_weight:.6f}")
+        print(f"  Physics weight range: {self.min_physics_weight:.6f} -> {self.max_physics_weight:.6f}")
+        print(f"  Safety weight range: {self.min_safety_weight:.6f} -> {self.max_safety_weight:.6f}")
         print(f"  Physics gradient clipping: {self.physics_grad_norm}")
-        print(f"  Physics update frequency: Every {self.physics_update_frequency} cycles")
+        print(f"  Physics frequency range: {self.min_physics_update_frequency} -> {self.initial_physics_update_frequency} cycles")
         print(f"  Physics activation threshold: {self.min_buffer_for_physics} samples")
         print(f"  Physics monitoring only: {self.physics_monitoring_only}")
+        print(f"  Three-phase curriculum: Minimal -> Progressive -> Strong physics")
         if torch.cuda.is_available():
             print(f"  GPU memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
     
@@ -166,26 +170,44 @@ class PIATSGAgent:
         return params
     
     def _update_physics_weights(self):
-        """Update physics loss weights based on training progress with more conservative approach"""
+        """Progressive physics weight adaptation for long training runs"""
         buffer_ratio = min(len(self.memory) / self.config.buffer_size, 1.0)
+        episode_progress = self.update_count / (self.config.num_episodes * 5)  # Approximate episodes
         
-        # More aggressive curriculum learning: reduce weights faster and more
-        decay_factor = 1.0 - (buffer_ratio * 0.9)  # Reduce to 10% of initial weight
+        # Three-phase curriculum learning:
+        # Phase 1 (0-30%): Minimal physics, let RL stabilize
+        # Phase 2 (30-70%): Gradually increase physics influence  
+        # Phase 3 (70-100%): Strong physics guidance for refinement
         
-        self.physics_loss_weight = max(
+        if episode_progress < 0.3:
+            # Phase 1: Minimal physics weight
+            decay_factor = 0.5  # Keep weights low
+            frequency_factor = 1.0  # Keep frequency low
+        elif episode_progress < 0.7:
+            # Phase 2: Progressive increase
+            phase_progress = (episode_progress - 0.3) / 0.4
+            decay_factor = 0.5 + phase_progress * 2.0  # Increase to 2.5x initial
+            frequency_factor = 1.0 - phase_progress * 0.6  # Increase frequency
+        else:
+            # Phase 3: Strong physics guidance
+            decay_factor = 3.0  # Strong physics influence
+            frequency_factor = 0.3  # High frequency updates
+        
+        # Apply curriculum weights
+        self.physics_loss_weight = min(
             self.initial_physics_weight * decay_factor,
-            self.min_physics_weight
+            self.max_physics_weight
         )
-        self.safety_loss_weight = max(
+        self.safety_loss_weight = min(
             self.initial_safety_weight * decay_factor,
-            self.min_safety_weight
+            self.max_safety_weight
         )
         
-        # Additional reduction based on update count to further stabilize
-        if self.update_count > 2000:
-            additional_decay = max(0.1, 1.0 - (self.update_count - 2000) / 10000)
-            self.physics_loss_weight *= additional_decay
-            self.safety_loss_weight *= additional_decay
+        # Adaptive update frequency
+        self.current_physics_update_frequency = max(
+            int(self.initial_physics_update_frequency * frequency_factor),
+            self.min_physics_update_frequency
+        )
     
     def _check_physics_stability(self, physics_loss, safety_loss):
         """Check if physics components are diverging and adapt learning rates"""
@@ -326,18 +348,18 @@ class PIATSGAgent:
             alpha_loss = self._update_alpha(states)
             losses['alpha_loss'] = alpha_loss
             
-            # Update Physics Components with proper frequency control
+            # Update Physics Components with adaptive frequency for long training
             should_update_physics = (
                 update_physics_components and 
-                not self.physics_monitoring_only and  # Respect monitoring-only mode
+                not self.physics_monitoring_only and
                 len(self.memory) > self.min_buffer_for_physics and
-                (self.total_training_cycles % self.physics_update_frequency == 0)  # Only every Nth training cycle
+                (self.total_training_cycles % self.current_physics_update_frequency == 0)
             )
             
-            # Always compute physics losses for monitoring, even if not updating
+            # More frequent monitoring for better tracking
             should_monitor_physics = (
                 len(self.memory) > self.min_buffer_for_physics and
-                (self.total_training_cycles % (self.physics_update_frequency * 2) == 0)  # Monitor every 2*N cycles
+                (self.total_training_cycles % (self.current_physics_update_frequency // 2) == 0)
             )
             
             if should_update_physics:
@@ -563,34 +585,54 @@ class PIATSGAgent:
             else:
                 losses['operator_loss'] = 0.0
             
-            # Safety Constraint update with balanced sampling
+            # Safety Constraint update with improved sampling for long training
             self.safety_optimizer.zero_grad()
             
             batch_size = states.shape[0]
-            # Create more balanced safe/unsafe samples
-            safe_indices = torch.randperm(batch_size)[:batch_size//3]
-            unsafe_indices = torch.randperm(batch_size)[batch_size//3:2*batch_size//3]
-            boundary_indices = torch.randperm(batch_size)[2*batch_size//3:]
+            # More sophisticated sampling strategy for long training
+            third = batch_size // 3
+            
+            # Progressive sampling based on training stage
+            episode_progress = self.update_count / (self.config.num_episodes * 5)
+            
+            if episode_progress < 0.5:
+                # Early training: balanced sampling
+                safe_ratio, unsafe_ratio, boundary_ratio = 0.4, 0.4, 0.2
+            else:
+                # Later training: focus more on boundary cases
+                safe_ratio, unsafe_ratio, boundary_ratio = 0.3, 0.3, 0.4
+            
+            safe_size = int(batch_size * safe_ratio)
+            unsafe_size = int(batch_size * unsafe_ratio)
+            boundary_size = batch_size - safe_size - unsafe_size
+            
+            indices = torch.randperm(batch_size)
+            safe_indices = indices[:safe_size]
+            unsafe_indices = indices[safe_size:safe_size + unsafe_size]
+            boundary_indices = indices[safe_size + unsafe_size:]
             
             safe_loss = torch.tensor(0.0, device=states.device)
             unsafe_loss = torch.tensor(0.0, device=states.device)
             boundary_loss = torch.tensor(0.0, device=states.device)
             
-            # Safe samples (should have positive CBF values)
+            # Safe samples with adaptive margin
+            safety_margin = 0.1 + episode_progress * 0.2  # Increase margin over time
             if len(safe_indices) > 0:
                 safe_logits = self.safety_constraint(states_safe[safe_indices], actions_safe[safe_indices])
-                safe_loss = F.relu(-safe_logits + 0.1).mean()
+                safe_loss = F.relu(-safe_logits + safety_margin).mean()
             
-            # Unsafe samples (should have negative CBF values)
+            # Unsafe samples with progressive aggression
+            aggression_factor = 1.2 + episode_progress * 0.5  # More aggressive over time
             if len(unsafe_indices) > 0:
-                unsafe_actions = actions_safe[unsafe_indices] * 1.5  # More aggressive actions
+                unsafe_actions = actions_safe[unsafe_indices] * aggression_factor
                 unsafe_actions_clamped = torch.clamp(unsafe_actions, -1, 1)
                 unsafe_logits = self.safety_constraint(states_safe[unsafe_indices], unsafe_actions_clamped)
-                unsafe_loss = F.relu(unsafe_logits + 0.1).mean()
+                unsafe_loss = F.relu(unsafe_logits + safety_margin).mean()
             
-            # Boundary samples (near constraint boundary)
+            # Boundary samples with adaptive noise
+            boundary_noise = 0.05 + episode_progress * 0.1  # More exploration over time
             if len(boundary_indices) > 0:
-                boundary_actions = actions_safe[boundary_indices] + 0.1 * torch.randn_like(actions_safe[boundary_indices])
+                boundary_actions = actions_safe[boundary_indices] + boundary_noise * torch.randn_like(actions_safe[boundary_indices])
                 boundary_actions_clamped = torch.clamp(boundary_actions, -1, 1)
                 boundary_logits = self.safety_constraint(states_safe[boundary_indices], boundary_actions_clamped)
                 boundary_loss = torch.abs(boundary_logits).mean()
