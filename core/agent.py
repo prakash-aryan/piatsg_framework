@@ -366,6 +366,39 @@ class PIATSGAgent:
         
         return losses
     
+    def _compute_physics_losses_only(self, states, actions, next_states):
+        """Compute physics losses for monitoring without updating networks"""
+        losses = {}
+        
+        try:
+            # Clone inputs to avoid any modification
+            states_safe = states.clone()
+            actions_safe = actions.clone()
+            next_states_safe = next_states.clone()
+            
+            # PINN loss computation only
+            with torch.no_grad():
+                pinn_loss = self.adaptive_pinn.physics_loss(states_safe, next_states_safe, actions_safe)
+                losses['pinn_loss'] = pinn_loss.item() if torch.isfinite(pinn_loss) else 0.0
+            
+            # Neural Operator loss computation only
+            with torch.no_grad():
+                operator_pred = self.neural_operator(states_safe.clone(), actions_safe.clone())
+                operator_loss = F.smooth_l1_loss(operator_pred, next_states_safe)
+                losses['operator_loss'] = operator_loss.item() if torch.isfinite(operator_loss) else 0.0
+            
+            # Safety constraint loss computation only
+            with torch.no_grad():
+                cbf_values = self.safety_constraint(states_safe.clone(), actions_safe.clone())
+                safety_loss = torch.mean(F.relu(-cbf_values))
+                losses['safety_loss'] = safety_loss.item() if torch.isfinite(safety_loss) else 0.0
+            
+        except Exception as e:
+            print(f"Warning: Error in physics monitoring: {e}")
+            losses = {'pinn_loss': 0.0, 'operator_loss': 0.0, 'safety_loss': 0.0}
+        
+        return losses
+    
     def _update_critics(self, states, actions, rewards, next_states, dones):
         """Update critic networks"""
         with torch.amp.autocast('cuda', enabled=True):

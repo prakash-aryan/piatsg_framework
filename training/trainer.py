@@ -296,27 +296,49 @@ class PIATSGTrainer:
         print("\nPhysics-Informed Training Analysis:")
         print("=" * 50)
         
-        if len(self.physics_loss_history) > 0:
-            final_physics_loss = np.mean(list(self.physics_loss_history)[-100:])
-            initial_physics_loss = self.physics_loss_history[0] if len(self.physics_loss_history) > 0 else final_physics_loss
-            if initial_physics_loss != 0:
+        if len(self.physics_loss_history) > 10:  # Need at least 10 data points
+            final_physics_loss = np.mean(list(self.physics_loss_history)[-50:])  # Average last 50
+            initial_physics_loss = np.mean(list(self.physics_loss_history)[:50])  # Average first 50
+            
+            if initial_physics_loss > 1e-6:  # Avoid division by very small numbers
                 physics_improvement = (initial_physics_loss - final_physics_loss) / abs(initial_physics_loss) * 100
             else:
                 physics_improvement = 0.0
+                
             print(f"AdaptivePINN Dynamics Learning:")
-            print(f"  Final physics loss: {final_physics_loss:.6f}")
+            print(f"  Initial avg physics loss: {initial_physics_loss:.6f}")
+            print(f"  Final avg physics loss: {final_physics_loss:.6f}")
             print(f"  Physics improvement: {physics_improvement:.1f}%")
+            print(f"  Physics data points: {len(self.physics_loss_history)}")
+        else:
+            print(f"AdaptivePINN Dynamics Learning:")
+            print(f"  Insufficient data for improvement calculation")
+            print(f"  Physics data points: {len(self.physics_loss_history)}")
+            if len(self.physics_loss_history) > 0:
+                final_physics_loss = np.mean(list(self.physics_loss_history))
+                print(f"  Average physics loss: {final_physics_loss:.6f}")
         
-        if len(self.safety_loss_history) > 0:
-            final_safety_loss = np.mean(list(self.safety_loss_history)[-100:])
-            initial_safety_loss = self.safety_loss_history[0] if len(self.safety_loss_history) > 0 else final_safety_loss
-            if initial_safety_loss != 0:
+        if len(self.safety_loss_history) > 10:  # Need at least 10 data points
+            final_safety_loss = np.mean(list(self.safety_loss_history)[-50:])   # Average last 50
+            initial_safety_loss = np.mean(list(self.safety_loss_history)[:50])  # Average first 50
+            
+            if initial_safety_loss > 1e-6:  # Avoid division by very small numbers
                 safety_improvement = (initial_safety_loss - final_safety_loss) / abs(initial_safety_loss) * 100
             else:
                 safety_improvement = 0.0
+                
             print(f"Control Barrier Function Safety:")
-            print(f"  Final safety loss: {final_safety_loss:.6f}")
+            print(f"  Initial avg safety loss: {initial_safety_loss:.6f}")
+            print(f"  Final avg safety loss: {final_safety_loss:.6f}")
             print(f"  Safety improvement: {safety_improvement:.1f}%")
+            print(f"  Safety data points: {len(self.safety_loss_history)}")
+        else:
+            print(f"Control Barrier Function Safety:")
+            print(f"  Insufficient data for improvement calculation")
+            print(f"  Safety data points: {len(self.safety_loss_history)}")
+            if len(self.safety_loss_history) > 0:
+                final_safety_loss = np.mean(list(self.safety_loss_history))
+                print(f"  Average safety loss: {final_safety_loss:.6f}")
         
         # Corrected final physics update statistics
         total_cycles = self.agent.total_training_cycles
@@ -327,6 +349,11 @@ class PIATSGTrainer:
         print(f"  Total training cycles: {total_cycles}")
         print(f"  Physics updates: {physics_updates}")
         print(f"  Physics update ratio: {physics_ratio:.1f}%")
+        
+        # Analysis of why physics improvement might be low
+        if len(self.physics_loss_history) < 50:
+            print(f"  Note: Limited physics training due to late activation (50k samples)")
+        
         print("=" * 50)
 
 def create_trainer(config):
